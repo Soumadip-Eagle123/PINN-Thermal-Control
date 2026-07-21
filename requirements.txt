@@ -1,0 +1,15 @@
+# Core Scientific & Mathematical Computing
+numpy>=1.23.5
+scipy>=1.10.0
+pandas>=2.0.0
+
+# Deep Learning Framework (PINN Engine)
+torch>=2.0.0
+
+# Web Dashboard & Interactive UI
+streamlit>=1.25.0
+plotly>=5.15.0
+matplotlib>=3.7.0
+
+# Hardware Integration (For Phase 2 Local Deployment)
+pyserial>=3.5
