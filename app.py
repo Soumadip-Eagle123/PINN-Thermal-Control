@@ -34,7 +34,7 @@ if st.button("🚀 Run Comparative Simulation"):
         plant_nmpc = ThermalPlant(tau=tau_val, K=1.2, delay=delay_time, T_ambient=25.0)
 
         pid = PIDController(Kp=kp, Ki=ki, Kd=kd, dt=dt)
-        nmpc = NMPCController(Hp=8, dt=dt)
+        nmpc = NMPCController(Hp=50, dt=dt, delay=delay_time)
 
         # Buffers
         t_hist = [0.0]
@@ -55,7 +55,7 @@ if st.button("🚀 Run Comparative Simulation"):
 
             # 2. NMPC Step
             T_nmpc_curr = T_nmpc_hist[-1]
-            u_nmpc = nmpc.compute_control(T_nmpc_curr, setpoint, u_prev=u_nmpc_hist[-1])
+            u_nmpc = nmpc.compute_control(T_current=T_nmpc_curr, setpoint=setpoint, T_amb=25, u_prev=u_nmpc_hist[-1])
             u_nmpc_del = plant_nmpc.get_delayed_input(u_nmpc_hist, t_hist, t_now)
             T_nmpc_next = plant_nmpc.step(T_nmpc_curr, u_nmpc_del, dt, disturbance=dist)
 

@@ -39,18 +39,40 @@ class PINNTrainer:
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.005)
 
     def generate_synthetic_data(self, n_samples=1000):
-        """Generates random operational states for training."""
-        T_curr = np.random.uniform(25.0, 80.0, (n_samples, 1))
-        u_delayed = np.random.uniform(0.0, 100.0, (n_samples, 1))
-        T_amb = np.random.uniform(20.0, 30.0, (n_samples, 1))
 
-        # True derivative from physical differential equation:
-        # dT/dt = (K * u_delayed - (T_curr - T_amb)) / tau
-        dT_dt_true = (self.K * u_delayed - (T_curr - T_amb)) / self.tau
+        dt = 0.5
 
-        X = np.hstack([T_curr, u_delayed, T_amb])
-        y = dT_dt_true
-        return torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
+        X = []
+        y = []
+
+        T = 25.0
+        T_amb = 25.0
+
+        for _ in range(n_samples):
+
+            # Random heater command
+            u = np.random.uniform(0, 100)
+
+            # Physical model
+            dT_dt = (self.K * u - (T - T_amb)) / self.tau
+
+            # Save current state
+            X.append([T, u, T_amb])
+            y.append([dT_dt])
+
+            # Move to the next temperature
+            T = T + dT_dt * dt
+
+            # Keep temperature realistic
+            T = np.clip(T, 20, 120)
+
+        X = np.array(X)
+        y = np.array(y)
+
+        return (
+            torch.tensor(X, dtype=torch.float32),
+            torch.tensor(y, dtype=torch.float32)
+        )
 
     def train(self, epochs=500):
         X_train, y_train = self.generate_synthetic_data()
