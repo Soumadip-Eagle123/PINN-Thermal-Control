@@ -1,18 +1,13 @@
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import pandas as pd
 import numpy as np
-import os
 
-# Set random seed for reproducibility
 torch.manual_seed(42)
 
 class ThermalPINN(nn.Module):
-    """
-    Physics-Informed Neural Network predicting future temperature state.
-    Inputs:  [T_current, u_delayed, ambient_temp]
-    Output:  [dT/dt (rate of temperature change)]
-    """
     def __init__(self, hidden_dim=32):
         super(ThermalPINN, self).__init__()
         self.net = nn.Sequential(
@@ -28,76 +23,64 @@ class ThermalPINN(nn.Module):
 
 
 class PINNTrainer:
-    """
-    Handles data generation, physics loss formulation, and PyTorch training loop.
-    """
-    def __init__(self, tau=8.0, K=1.2, lambda_physics=0.1):
-        self.tau = tau                  # Physical time constant
-        self.K = K                      # Physical system gain
+    def __init__(self, tau_nominal=8.0, K_nominal=1.2, lambda_physics=0.1):
+        self.tau = tau_nominal
+        self.K = K_nominal
         self.lambda_physics = lambda_physics
         self.model = ThermalPINN()
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.005)
 
-    def generate_synthetic_data(self, n_samples=1000):
+    def load_dataset(self, csv_path="data/tclab_dynamic_data.csv"):
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"Missing dataset at {csv_path}. Run generate_data.py first.")
 
-        dt = 0.5
+        df = pd.read_csv(csv_path)
+        
+        # Load formatted dataset
+        if "T_current" in df.columns and "u_delayed" in df.columns:
+            X = df[["T_current", "u_delayed", "T_ambient"]].values
+            y = df[["dT_dt"]].values
+        # Fallback if raw Model_Data.csv is used
+        elif "T1" in df.columns and "Q1" in df.columns:
+            time_col = df["Time"].values
+            dt = np.mean(np.diff(time_col)) if len(time_col) > 1 else 1.0
+            T_raw = df["T1"].values
+            u_raw = df["Q1"].values
+            delay_steps = max(1, int(round(4.0 / dt)))
+            u_del = np.roll(u_raw, delay_steps)
+            u_del[:delay_steps] = 0.0
+            dT = np.gradient(T_raw, dt)
+            X = np.column_stack([T_raw, u_del, np.full(len(df), T_raw[0])])
+            y = dT.reshape(-1, 1)
+        else:
+            raise ValueError(f"Unrecognized columns: {df.columns.tolist()}")
 
-        X = []
-        y = []
-
-        T = 25.0
-        T_amb = 25.0
-
-        for _ in range(n_samples):
-
-            # Random heater command
-            u = np.random.uniform(0, 100)
-
-            # Physical model
-            dT_dt = (self.K * u - (T - T_amb)) / self.tau
-
-            # Save current state
-            X.append([T, u, T_amb])
-            y.append([dT_dt])
-
-            # Move to the next temperature
-            T = T + dT_dt * dt
-
-            # Keep temperature realistic
-            T = np.clip(T, 20, 120)
-
-        X = np.array(X)
-        y = np.array(y)
-
-        return (
-            torch.tensor(X, dtype=torch.float32),
-            torch.tensor(y, dtype=torch.float32)
-        )
+        return torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
 
     def train(self, epochs=500):
-        X_train, y_train = self.generate_synthetic_data()
-        
-        print("Training PINN Model with Physics Loss Enforcement...")
+        X_train, y_train = self.load_dataset()
+        print(f"Training PINN on {len(X_train)} samples with physics weight λ={self.lambda_physics}...")
+
         for epoch in range(1, epochs + 1):
             self.model.train()
             self.optimizer.zero_grad()
 
-            # Forward pass: Data loss (MSE)
             dT_pred = self.model(X_train)
             loss_data = nn.MSELoss()(dT_pred, y_train)
 
-            # Physics loss enforcement: Residual of differential equation
-            # Res: dT/dt_pred - (K * u - (T - T_amb)) / tau
+            # Physics Residual: dT/dt - (K*u - (T - T_amb)) / tau
             T_curr = X_train[:, 0:1]
             u_del = X_train[:, 1:2]
             T_amb = X_train[:, 2:3]
 
-            physics_residual = dT_pred - ((self.K * u_del - (T_curr - T_amb)) / self.tau)
-            loss_physics = torch.mean(physics_residual ** 2)
+            physics_res = dT_pred - ((self.K * u_del - (T_curr - T_amb)) / self.tau)
+            loss_physics = torch.mean(physics_res ** 2)
 
-            # Total combined PINN loss
-            total_loss = loss_data + self.lambda_physics * loss_physics
+            # Thermodynamic Guardrail: when u == 0 and T > T_amb, cooling rate dT/dt must be <= 0
+            cooling_violation = torch.relu(dT_pred * (u_del < 0.01).float() * (T_curr > T_amb).float())
+            loss_guardrail = torch.mean(cooling_violation ** 2)
 
+            total_loss = loss_data + self.lambda_physics * loss_physics + 0.1 * loss_guardrail
             total_loss.backward()
             self.optimizer.step()
 
@@ -107,13 +90,10 @@ class PINNTrainer:
     def save_model(self, filepath="models/trained_pinn.pth"):
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         torch.save(self.model.state_dict(), filepath)
-        print(f"PINN Model saved successfully to {filepath}")
+        print(f"Model saved to {filepath}")
 
 
-# =====================================================================
-# VERIFICATION RUN FOR TEAMMATE 2
-# =====================================================================
 if __name__ == "__main__":
-    trainer = PINNTrainer(tau=8.0, K=1.2, lambda_physics=0.2)
+    trainer = PINNTrainer(tau_nominal=8.0, K_nominal=1.2, lambda_physics=0.1)
     trainer.train(epochs=600)
     trainer.save_model("models/trained_pinn.pth")
